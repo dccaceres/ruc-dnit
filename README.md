@@ -1,6 +1,6 @@
 # Zip Downloader + API RUC
 
-Descarga y descomprime automáticamente archivos `.zip` desde una página web y proporciona una API REST para consultar RUCs.
+Descarga y descomprime automáticamente archivos `.zip` desde una página web (DNIT) y proporciona una API REST para consultar RUCs.
 
 ## 🚀 Características
 
@@ -105,8 +105,8 @@ curl http://localhost:8000/ruc/3634374
 **Respuesta**:
 ```json
 {
-  "ruc": "3634374-9",
-  "razon_social": "DANIEL CACERES",
+  "ruc": "1234567-8",
+  "razon_social": "JUAN PEREZ",
   "estado": "ACTIVO"
 }
 ```
@@ -116,13 +116,13 @@ Busca por RUC o razón social
 
 ```bash
 # Buscar por parte de la razón social
-curl "http://localhost:8000/buscar?query=DANIEL"
+curl "http://localhost:8000/buscar?query=JUAN"
 
 # Buscar por RUC
-curl "http://localhost:8000/buscar?query=3634374"
+curl "http://localhost:8000/buscar?query=1234567"
 
 # Limitar resultados
-curl "http://localhost:8000/buscar?query=DANIEL&limit=5"
+curl "http://localhost:8000/buscar?query=JUAN&limit=5"
 ```
 
 **Respuesta**:
@@ -130,8 +130,8 @@ curl "http://localhost:8000/buscar?query=DANIEL&limit=5"
 {
   "resultados": [
     {
-      "ruc": "3634374-9",
-      "razon_social": "DANIEL CACERES",
+      "ruc": "1234567-8",
+      "razon_social": "JUAN PEREZ",
       "estado": "ACTIVO"
     }
   ],
@@ -211,3 +211,13 @@ zip-downloader/
 - La base de datos SQLite se sobrescribe en cada ejecución
 - El RUC se retorna concatenado con el dígito verificador: `{ruc}-{dv}`
 - La API soporta hasta 100 resultados por búsqueda
+
+## 👤 Autor
+
+- **Daniel Cáceres**
+- Correo: dccaceres@gmail.com
+
+## 📄 Licencia
+
+Este proyecto está bajo la licencia **MIT**.
+

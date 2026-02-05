@@ -62,4 +62,5 @@ Thumbs.db
 
 # Downloads
 downloads/
+data/
 *.zip

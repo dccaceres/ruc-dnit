@@ -18,7 +18,7 @@ app = FastAPI(
 
 def get_db_path() -> Path:
     """Retorna la ruta de la base de datos SQLite."""
-    return Path(__file__).parent.parent.parent / "data" / "ruc.sqlite"
+    return Path(__file__).parent.parent / "data" / "ruc.sqlite"
 
 
 def search_ruc(ruc: str) -> Optional[dict]:

@@ -181,9 +181,9 @@ class ZipDownloader:
             True si el proceso fue exitoso
         """
         try:
-            # Determinar el directorio raíz del proyecto
+            # Determinar el directorio raíz del proyecto (donde está src/)
             if project_root is None:
-                project_root = Path(__file__).parent.parent.parent
+                project_root = Path(__file__).parent.parent
             else:
                 project_root = Path(project_root)
 

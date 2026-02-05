@@ -1,0 +1,1 @@
+"""Inicializador del paquete src."""

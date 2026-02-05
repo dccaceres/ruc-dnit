@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zip-downloader"
+version = "1.0.0"
+description = "Descarga y descomprime archivos .zip desde una página web"
+authors = [{name = "Your Name"}]
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0"
+]
+
+[project.scripts]
+zip-downloader = "src.main:cli"
+ruc-api = "src.api:run_server"

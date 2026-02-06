@@ -1,14 +1,14 @@
-# Zip Downloader + API RUC
+# DNIT RUC Zip Downloader + API RUC
 
-Descarga y descomprime automáticamente archivos `.zip` desde una página web (DNIT) y proporciona una API REST para consultar RUCs.
+Descarga y descomprime automáticamente archivos `.zip` desde la página web configurable (DNIT) y proporciona una API REST para consultar RUCs.
 
 ## 🚀 Características
 
-- 🔍 Busca enlaces a archivos `.zip` en cualquier página web
+- 🔍 Busca enlaces a archivos `.zip` en la página web
 - ⬇️ Descarga múltiples archivos automáticamente
 - 📦 Descomprime y unifica archivos `.txt` en CSV
-- 🗃️ Crea base de datos SQLite con los datos
 - 🔧 Validación automática de CSV con eliminación de errores
+- 🗃️ Crea base de datos SQLite con los datos
 - 🌐 API REST para consulta de RUCs
 - 📊 Búsqueda por RUC exacto o razón social
 
@@ -16,7 +16,7 @@ Descarga y descomprime automáticamente archivos `.zip` desde una página web (D
 
 ```bash
 # Clonar o copiar el proyecto
-cd zip-downloader
+cd ruc-dnit
 
 # Instalar dependencias
 pip install -r requirements.txt

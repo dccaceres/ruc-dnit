@@ -16,7 +16,7 @@ Descarga y descomprime automáticamente archivos `.zip` desde una página web (D
 
 ```bash
 # Clonar o copiar el proyecto
-cd zip-downloader
+cd ruc-dnit
 
 # Instalar dependencias
 pip install -r requirements.txt

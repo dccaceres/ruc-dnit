@@ -162,11 +162,11 @@ La API incluye documentación automática de Swagger/OpenAPI:
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
-## � Despliegue en Producción
+## 🐳 Despliegue en Producción
 
 Para desplegar la aplicación en un entorno de producción utilizando Docker, consulta la guía detallada en [DEPLOY.md](./DEPLOY.md).
 
-## �📋 Proceso de Validación
+## 📋 Proceso de Validación
 
 El proceso de validación del CSV incluye:
 

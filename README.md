@@ -155,6 +155,17 @@ curl http://localhost:8000/health
 }
 ```
 
+#### Característica: Determinación de Tipo de Persona
+
+La API incluye una funcionalidad para determinar si un RUC corresponde a persona física o jurídica:
+
+- **Persona Jurídica**: RUCs que empiezan con "800", "801", "802" y tienen mayor o igual a 8 dígitos
+- **Persona Física**: RUCs que NO empiezan con "800", "801", "802" y tienen entre 6-8 dígitos
+- **Desconocido**: Formatos no válidos o que no cumplen los criterios
+**Obs.: Si se puede mejorar la logica bienvenido sea un PR**
+
+Esta información se incluye automáticamente en todas las respuestas de la API.
+
 #### Documentación Interactiva
 
 La API incluye documentación automática de Swagger/OpenAPI:
@@ -180,10 +191,46 @@ El proceso de validación del CSV incluye:
 - `contenido_linea`: contenido de la línea eliminada
 - `motivo_error`: descripción del problema
 
+## 📝 Registros y Diagnóstico
+
+El sistema genera archivos de log detallados para diagnóstico y seguimiento:
+
+- **Ubicación**: `logs/zip_downloader_YYYYMMDD_HHMMSS.log`
+- **Formato**: `timestamp - nombre - nivel - mensaje`
+- **Niveles**: DEBUG, INFO, WARNING, ERROR
+
+**Ejemplo de contenido de log**:
+```
+2026-02-12 11:13:48,894 - downloader - INFO - ZipDownloader inicializado con output_dir=./downloads
+2026-02-12 11:13:48,894 - downloader - INFO - Encontrados 2 archivos ZIP en https://example.com
+2026-02-12 11:13:48,898 - downloader - INFO - Descargando: archivo1.zip
+2026-02-12 11:13:48,901 - downloader - INFO - Descarga completada: archivo1.zip (123.45 KB)
+```
+
+**Configuración de logging** (opcional):
+```python
+from downloader import ZipDownloader
+import logging
+
+downloader = ZipDownloader(
+    log_dir="./mis_logs",      # Directorio personalizado
+    log_level=logging.DEBUG    # Nivel detallado
+)
+```
+
+**Niveles disponibles**:
+- `logging.DEBUG`: Información detallada (desarrollo)
+- `logging.INFO`: Operaciones normales (recomendado)
+- `logging.WARNING`: Solo advertencias y errores
+- `logging.ERROR`: Solo errores críticos
+
 ## 📂 Estructura del proyecto
 
 ```
 zip-downloader/
+├── logs/                # Archivos de log con timestamp
+│   ├── zip_downloader_YYYYMMDD_HHMMSS.log
+│   └── ...
 ├── src/
 │   ├── __init__.py
 │   ├── downloader.py    # Lógica de descarga/descompresión/unificación

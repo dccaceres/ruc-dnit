@@ -1,10 +1,12 @@
 """Módulo principal para descarga y descompresión de archivos ZIP."""
 
 import csv
+import logging
 import os
 import re
 import sqlite3
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
@@ -13,20 +15,96 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore
 
 
+def setup_logging(log_dir: str = "logs", log_level: int = logging.INFO) -> logging.Logger:
+    """
+    Configura el sistema de logging con archivo rotativo por fecha/hora.
+
+    Args:
+        log_dir: Directorio donde se guardarán los logs
+        log_level: Nivel de logging (DEBUG, INFO, WARNING, ERROR)
+
+    Returns:
+        Logger configurado
+    """
+    # Crear directorio de logs si no existe
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+
+    # Generar nombre de archivo con fecha y hora
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = log_path / f"zip_downloader_{timestamp}.log"
+
+    # Cerrar handlers existentes para evitar ResourceWarning
+    for handler in logging.root.handlers[:]:
+        handler.close()
+        logging.root.removeHandler(handler)
+
+    # Configurar logging
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_filename, encoding='utf-8')
+        ]
+    )
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging configurado: {log_filename}")
+    logger.info(f"Nivel de logging: {logging.getLevelName(log_level)}")
+    
+    return logger
+
+
+# Configurar logging al importar el módulo
+logger = setup_logging()
+
+
 class ZipDownloader:
     """Descarga y descomprime archivos ZIP desde una página web."""
 
-    def __init__(self, output_dir: str = "./downloads", overwrite: bool = True):
+    def __init__(self, output_dir: str = "./downloads", overwrite: bool = True, 
+                 request_timeout: int = 30, download_timeout: int = 60,
+                 log_dir: str = "logs", log_level: int = logging.INFO):
         """
         Inicializa el descargador.
 
         Args:
             output_dir: Directorio donde se guardarán los archivos
             overwrite: Si es True, sobrescribe archivos existentes
+            request_timeout: Timeout para solicitudes HTTP (segundos)
+            download_timeout: Timeout para descargas de archivos (segundos)
+            log_dir: Directorio para archivos de log
+            log_level: Nivel de logging (DEBUG, INFO, WARNING, ERROR)
         """
         self.output_dir = Path(output_dir)
         self.overwrite = overwrite
+        self.request_timeout = request_timeout
+        self.download_timeout = download_timeout
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Reconfigurar logging si se especifican parámetros diferentes
+        global logger
+        logger = setup_logging(log_dir, log_level)
+        
+        logger.info(f"ZipDownloader inicializado con output_dir={self.output_dir}")
+        logger.info(f"Parámetros: overwrite={overwrite}, request_timeout={request_timeout}s, download_timeout={download_timeout}s")
+
+    def _is_valid_url(self, url: str) -> bool:
+        """
+        Valida que una URL sea válida para HTTP/HTTPS.
+
+        Args:
+            url: URL a validar
+
+        Returns:
+            True si la URL es válida (solo http/https)
+        """
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc, result.scheme.lower() in ['http', 'https']])
+        except ValueError:
+            return False
 
     def find_zip_urls(self, url: str) -> List[str]:
         """
@@ -38,8 +116,13 @@ class ZipDownloader:
         Returns:
             Lista de URLs completas de archivos .zip
         """
+        if not self._is_valid_url(url):
+            logger.error(f"URL inválida: {url}")
+            return []
+
         try:
-            response = requests.get(url, timeout=30)
+            logger.debug(f"Analizando página: {url}")
+            response = requests.get(url, timeout=self.request_timeout)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, "html.parser")
@@ -52,55 +135,81 @@ class ZipDownloader:
                 if href_lower.endswith(".zip") or ".zip/" in href_lower:
                     # Convertir URLs relativas a absolutas
                     full_url = urljoin(url, href)
-                    zip_urls.append(full_url)
+                    if self._is_valid_url(full_url):
+                        zip_urls.append(full_url)
 
+            logger.info(f"Encontrados {len(zip_urls)} archivos ZIP en {url}")
             return zip_urls
 
         except requests.RequestException as e:
-            print(f"Error al acceder a {url}: {e}")
+            logger.error(f"Error al acceder a {url}: {e}")
             return []
 
-    def download_file(self, url: str) -> Optional[Path]:
+    def _get_filename_from_url(self, url: str) -> str:
+        """
+        Extrae el nombre de archivo de una URL.
+
+        Args:
+            url: URL del archivo
+
+        Returns:
+            Nombre del archivo con extensión .zip
+        """
+        # Buscar el patrón [nombre].zip en la URL (ej: ruc0.zip en .../ruc0.zip/...)
+        zip_match = re.search(r"([^/]+\.zip)", url, re.IGNORECASE)
+        if zip_match:
+            return zip_match.group(1)
+        
+        # Fallback al método anterior
+        filename = Path(urlparse(url).path).name
+        if not filename.endswith(".zip"):
+            filename += ".zip"
+        
+        return filename if filename else "downloaded_file.zip"
+
+    def download_file(self, url: str, chunk_size: int = 8192) -> Optional[Path]:
         """
         Descarga un archivo desde una URL.
 
         Args:
             url: URL del archivo a descargar
+            chunk_size: Tamaño de los chunks para descarga en bytes
 
         Returns:
             Ruta del archivo descargado
         """
+        if not self._is_valid_url(url):
+            logger.error(f"URL inválida para descarga: {url}")
+            return None
+
         try:
-            response = requests.get(url, stream=True, timeout=60)
+            logger.debug(f"Iniciando descarga de: {url}")
+            response = requests.get(url, stream=True, timeout=self.download_timeout)
             response.raise_for_status()
 
-            # Obtener nombre del archivo de la URL
-            # Buscar el patrón [nombre].zip en la URL (ej: ruc0.zip en .../ruc0.zip/...)
-            zip_match = re.search(r"([^/]+\.zip)", url, re.IGNORECASE)
-            if zip_match:
-                filename = zip_match.group(1)
-            else:
-                # Fallback al método anterior
-                filename = Path(urlparse(url).path).name
-                if not filename.endswith(".zip"):
-                    filename += ".zip"
-
-            if not filename:
-                filename = "downloaded_file.zip"
-
+            filename = self._get_filename_from_url(url)
             filepath = self.output_dir / filename
 
             # Descargar el archivo (siempre sobreescribir)
-            print(f"  ⬇️  Descargando: {filename}")
+            logger.info(f"Descargando: {filename}")
+            
+            # Crear directorio si no existe
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(filepath, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
 
+            file_size = filepath.stat().st_size
+            logger.info(f"Descarga completada: {filename} ({file_size / 1024:.2f} KB)")
             return filepath
 
         except requests.RequestException as e:
-            print(f"  ❌ Error al descargar {url}: {e}")
+            logger.error(f"Error al descargar {url}: {e}")
+            return None
+        except IOError as e:
+            logger.error(f"Error de I/O al guardar {url}: {e}")
             return None
 
     def extract_zip(self, zip_path: Path) -> bool:
@@ -114,7 +223,7 @@ class ZipDownloader:
             True si la extracción fue exitosa
         """
         try:
-            print(f"  📦 Descomprimiendo: {zip_path.name}")
+            logger.info(f"Descomprimiendo: {zip_path.name}")
             extract_dir = self.output_dir / zip_path.stem
             extract_dir.mkdir(exist_ok=True)
 
@@ -123,14 +232,14 @@ class ZipDownloader:
 
             # Eliminar el ZIP después de descomprimir
             zip_path.unlink()
-            print(f"  ✅ Extraído en: {extract_dir}")
+            logger.info(f"Extraído en: {extract_dir}")
             return True
 
         except zipfile.BadZipFile as e:
-            print(f"  ❌ Error: {zip_path.name} no es un ZIP válido")
+            logger.error(f"Error: {zip_path.name} no es un ZIP válido")
             return False
         except Exception as e:
-            print(f"  ❌ Error al descomprimir {zip_path.name}: {e}")
+            logger.error(f"Error al descomprimir {zip_path.name}: {e}")
             return False
 
     def process_url(self, url: str) -> dict:
@@ -143,15 +252,15 @@ class ZipDownloader:
         Returns:
             Diccionario con estadísticas del proceso
         """
-        print(f"\n🔍 Analizando: {url}")
+        logger.info(f"Analizando: {url}")
 
         zip_urls = self.find_zip_urls(url)
 
         if not zip_urls:
-            print("  ⚠️  No se encontraron archivos .zip")
+            logger.warning("No se encontraron archivos .zip")
             return {"found": 0, "downloaded": 0, "extracted": 0}
 
-        print(f"  📋 Archivos encontrados: {len(zip_urls)}")
+        logger.info(f"Archivos encontrados: {len(zip_urls)}")
 
         stats = {"found": len(zip_urls), "downloaded": 0, "extracted": 0}
 
@@ -163,12 +272,13 @@ class ZipDownloader:
                     stats["extracted"] += 1
 
         # Unificar archivos .txt y crear base de datos SQLite
-        print("\n🔄 Unificando archivos .txt y creando base de datos...")
+        logger.info("Unificando archivos .txt y creando base de datos...")
         self.unify_txt_files()
 
+        logger.info(f"Proceso completado. Estadísticas: {stats}")
         return stats
 
-    def unify_txt_files(self, project_root: Optional[Path] = None) -> bool:
+    def unify_txt_files(self, project_root: Optional[Path] = None, batch_size: int = 1000) -> bool:
         """
         Recorre todas las carpetas en downloads/, busca archivos .txt y los unifica
         en un archivo CSV ruc.csv en el directorio raíz del proyecto, luego crea
@@ -176,6 +286,7 @@ class ZipDownloader:
 
         Args:
             project_root: Ruta del directorio raíz del proyecto (opcional)
+            batch_size: Número de líneas a procesar por lote (para archivos grandes)
 
         Returns:
             True si el proceso fue exitoso
@@ -195,75 +306,137 @@ class ZipDownloader:
             txt_files = list(self.output_dir.glob("**/*.txt"))
 
             if not txt_files:
-                print("  ⚠️  No se encontraron archivos .txt en downloads/")
+                logger.warning("No se encontraron archivos .txt en downloads/")
                 return False
 
-            print(f"  📋 Archivos .txt encontrados: {len(txt_files)}")
+            logger.info(f"Archivos .txt encontrados: {len(txt_files)}")
 
             # Unificar todos los archivos en ruc.csv en la carpeta data
             csv_path = data_dir / "ruc.csv"
-            rows = []
+            temp_csv_path = data_dir / "ruc_temp.csv"
             headers = None
+            total_rows = 0
 
-            # Leer todos los archivos .txt
+            # Procesar archivos .txt por lotes para optimizar memoria
+            logger.info(f"Procesando archivos .txt con batch_size={batch_size}")
+            
+            # Primero, determinar los headers
             for txt_file in txt_files:
                 try:
                     with open(txt_file, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                        if content:
-                            # Asumir que cada línea es un registro separado por pipe (|)
-                            lines = content.split("\n")
-                            for line_idx, line in enumerate(lines):
-                                line = line.strip()
-                                if line:
-                                    # Separar por pipe (|)
-                                    parts = [p.strip() for p in line.split("|")]
-
-                                    if len(parts) > 0:
-                                        # La primera línea del primer archivo es el header
-                                        if line_idx == 0 and headers is None:
-                                            headers = parts
-                                        else:
-                                            rows.append(parts)
+                        first_line = f.readline().strip()
+                        if first_line and headers is None:
+                            headers = [p.strip() for p in first_line.split("|")]
+                            if headers:
+                                break
                 except Exception as e:
-                    print(f"  ⚠️  Error al leer {txt_file.name}: {e}")
+                    logger.warning(f"Error al leer headers de {txt_file.name}: {e}")
+                    continue
 
-            if not rows:
-                print("  ⚠️  No se encontraron datos válidos en los archivos .txt")
-                return False
-
-            # Usar los headers del primer archivo o generar headers por defecto
+            # Usar headers por defecto si no se encontraron
             if headers is None:
                 headers = ["ruc", "razon_social", "dv", "ruc_anterior", "estado"]
+                logger.info("Usando headers por defecto")
 
-            # Escribir el archivo en formato delimitado por pipe (|)
-            print(f"  📝 Creando archivo delimitado por pipe: {csv_path}")
-            with open(csv_path, "w", encoding="utf-8") as f:
-                # Escribir el header
+            # Escribir el header al archivo temporal
+            with open(temp_csv_path, "w", encoding="utf-8") as f:
                 f.write("|".join(headers) + "\n")
-                # Escribir las filas de datos
-                for row in rows:
-                    f.write("|".join(row) + "\n")
 
-            print(f"  ✅ Archivo creado: {csv_path} con {len(rows)} registros")
+            # Procesar cada archivo .txt línea por línea
+            for txt_file in txt_files:
+                try:
+                    logger.debug(f"Procesando archivo: {txt_file.name}")
+                    with open(txt_file, "r", encoding="utf-8") as f:
+                        # Saltar header si es el primer archivo
+                        first_line_skipped = False
+                        batch = []
+                        
+                        for line_idx, line in enumerate(f):
+                            line = line.strip()
+                            if line:
+                                # Saltar la primera línea (header) de cada archivo
+                                if line_idx == 0:
+                                    first_line_skipped = True
+                                    continue
+                                
+                                # Separar por pipe (|)
+                                parts = [p.strip() for p in line.split("|")]
+                                if len(parts) > 0:
+                                    batch.append(parts)
+                                    
+                                    # Escribir por lotes para optimizar I/O
+                                    if len(batch) >= batch_size:
+                                        self._write_batch_to_csv(temp_csv_path, batch)
+                                        total_rows += len(batch)
+                                        batch = []
+                                        logger.debug(f"Procesadas {total_rows} líneas...")
+                        
+                        # Escribir el último batch
+                        if batch:
+                            self._write_batch_to_csv(temp_csv_path, batch)
+                            total_rows += len(batch)
+                            batch = []
+                            
+                except Exception as e:
+                    logger.warning(f"Error al procesar {txt_file.name}: {e}")
+                    continue
+
+            if total_rows == 0:
+                logger.warning("No se encontraron datos válidos en los archivos .txt")
+                temp_csv_path.unlink()  # Limpiar archivo temporal
+                return False
+
+            logger.info(f"Archivo temporal creado: {temp_csv_path} con {total_rows} registros")
+
+            # Eliminar archivo final si existe antes de renombrar
+            if csv_path.exists():
+                logger.debug(f"Eliminando archivo existente: {csv_path}")
+                csv_path.unlink()
+
+            # Renombrar archivo temporal al final
+            temp_csv_path.rename(csv_path)
+            logger.info(f"Archivo final creado: {csv_path}")
 
             # Verificar que el archivo sea válido
             if not self._validate_pipe_file(csv_path):
-                print("  ❌ El archivo no es válido")
+                logger.error("El archivo no es válido")
                 return False
 
             # Crear la base de datos SQLite
             sqlite_path = data_dir / "ruc.sqlite"
             if self._create_sqlite_db(csv_path, sqlite_path, headers):
-                print(f"  ✅ Base de datos SQLite creada: {sqlite_path}")
+                logger.info(f"Base de datos SQLite creada: {sqlite_path}")
                 return True
             else:
-                print("  ❌ Error al crear la base de datos SQLite")
+                logger.error("Error al crear la base de datos SQLite")
                 return False
 
         except Exception as e:
-            print(f"  ❌ Error al unificar archivos: {e}")
+            logger.error(f"Error al unificar archivos: {e}")
+            # Limpiar archivo temporal si existe
+            if 'temp_csv_path' in locals() and temp_csv_path.exists():
+                try:
+                    temp_csv_path.unlink()
+                    logger.debug(f"Archivo temporal eliminado por error: {temp_csv_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Error al limpiar archivo temporal {temp_csv_path}: {cleanup_error}")
             return False
+
+    def _write_batch_to_csv(self, csv_path: Path, batch: List[List[str]]) -> None:
+        """
+        Escribe un lote de datos al archivo CSV.
+
+        Args:
+            csv_path: Ruta del archivo CSV
+            batch: Lista de filas a escribir
+        """
+        try:
+            with open(csv_path, "a", encoding="utf-8") as f:
+                for row in batch:
+                    f.write("|".join(row) + "\n")
+        except Exception as e:
+            logger.error(f"Error al escribir batch al CSV: {e}")
+            raise
 
     def _validate_pipe_file(self, file_path: Path) -> bool:
         """
@@ -284,8 +457,8 @@ class ZipDownloader:
 
             # Verificar que hay al menos header + 1 fila de datos
             if len(lines) < 2:
-                print(
-                    f"  ❌ El archivo no es válido: Solo tiene {len(lines)} línea(s). Se requiere al menos header + 1 fila de datos."
+                logger.error(
+                    f"El archivo no es válido: Solo tiene {len(lines)} línea(s). Se requiere al menos header + 1 fila de datos."
                 )
                 return False
 
@@ -308,29 +481,29 @@ class ZipDownloader:
 
                     # Mostrar mensaje de eliminación
                     if "CANCELADO" in line.upper():
-                        print(f"  🗑️  Eliminando línea {idx}: {motivo}")
+                        logger.info(f"Eliminando línea {idx}: {motivo}")
                     else:
-                        print(f"  🗑️  Eliminando línea {idx}: {motivo}")
-                        print(f"     Contenido línea {idx}: {line[:100]}...")
+                        logger.info(f"Eliminando línea {idx}: {motivo}")
+                        logger.debug(f"Contenido línea {idx}: {line[:100]}...")
 
             # Si se encontraron líneas con errores, procesarlas
             if error_lines:
-                print(
-                    f"  📝 Se eliminarán {len(error_lines)} línea(s) con errores del archivo..."
+                logger.info(
+                    f"Se eliminarán {len(error_lines)} línea(s) con errores del archivo..."
                 )
 
                 # Crear archivo error.csv en el mismo directorio que file_path
                 error_path = file_path.parent / "error.csv"
 
                 # Guardar las líneas con error en error.csv
-                print(f"  📝 Creando archivo de errores: {error_path}")
+                logger.info(f"Creando archivo de errores: {error_path}")
                 with open(error_path, "w", encoding="utf-8") as f:
                     f.write("numero_linea|contenido_linea|motivo_error\n")
                     for num_linea, contenido, motivo in error_lines:
                         # Escapar pipes en el contenido
                         contenido_escapado = contenido.replace("|", "\\|")
                         f.write(f"{num_linea}|{contenido_escapado}|{motivo}\n")
-                print(f"  ✅ Archivo de errores creado: {error_path}")
+                logger.info(f"Archivo de errores creado: {error_path}")
 
                 # Eliminar líneas en orden inverso para no afectar los índices
                 line_indices_to_remove = [idx for idx, _, _ in error_lines]
@@ -341,24 +514,24 @@ class ZipDownloader:
                 with open(file_path, "w", encoding="utf-8") as f:
                     for line in lines:
                         f.write(line + "\n")
-                print(
-                    f"  ✅ Archivo actualizado: {len(lines)} líneas después de eliminación"
+                logger.info(
+                    f"Archivo actualizado: {len(lines)} líneas después de eliminación"
                 )
 
             return True
 
         except FileNotFoundError:
-            print(f"  ❌ El archivo no es válido: No existe el archivo {file_path}")
+            logger.error(f"El archivo no es válido: No existe el archivo {file_path}")
             return False
         except UnicodeDecodeError:
-            print(f"  ❌ El archivo no es válido: No se puede decodificar con UTF-8")
+            logger.error(f"El archivo no es válido: No se puede decodificar con UTF-8")
             return False
         except Exception as e:
-            print(f"  ❌ El archivo no es válido: {type(e).__name__} - {e}")
+            logger.error(f"El archivo no es válido: {type(e).__name__} - {e}")
             return False
 
     def _create_sqlite_db(
-        self, file_path: Path, sqlite_path: Path, headers: List[str]
+        self, file_path: Path, sqlite_path: Path, headers: List[str], batch_size: int = 1000
     ) -> bool:
         """
         Crea una base de datos SQLite a partir de un archivo delimitado por pipe (|).
@@ -368,6 +541,7 @@ class ZipDownloader:
             file_path: Ruta del archivo delimitado por pipe
             sqlite_path: Ruta donde se creará la base de datos SQLite
             headers: Lista de encabezados del archivo
+            batch_size: Número de registros a insertar por transacción
 
         Returns:
             True si la base de datos se creó exitosamente
@@ -405,47 +579,64 @@ class ZipDownloader:
             """
             cursor.execute(create_table_sql)
 
-            # Leer el archivo delimitado por pipe e insertar los datos
+            # Leer el archivo delimitado por pipe e insertar los datos por lotes
+            insert_sql = """
+                INSERT INTO ruc (ruc, razon_social, dv, ruc_anterior, estado)
+                VALUES (?, ?, ?, ?, ?)
+            """
+            
+            batch = []
+            insert_count = 0
+            
             with open(file_path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
+                # Saltar header
+                header = f.readline()
+                
+                for line_idx, line in enumerate(f):
+                    line = line.strip()
+                    if line:
+                        # Separar por pipe (|)
+                        parts = [p.strip() for p in line.split("|")]
+                        
+                        # Mapear por posición
+                        values = []
+                        for field in ["ruc", "razon_social", "dv", "ruc_anterior", "estado"]:
+                            idx = field_indices[field]
+                            values.append(parts[idx] if idx < len(parts) else "")
+                        
+                        batch.append(tuple(values))
+                        
+                        # Insertar por lotes para optimizar rendimiento
+                        if len(batch) >= batch_size:
+                            cursor.executemany(insert_sql, batch)
+                            insert_count += len(batch)
+                            batch = []
+                            
+                            # Commit periódico para evitar transacciones demasiado grandes
+                            if insert_count % (batch_size * 10) == 0:
+                                conn.commit()
+                                logger.debug(f"Insertados {insert_count} registros...")
+                
+                # Insertar el último batch
+                if batch:
+                    cursor.executemany(insert_sql, batch)
+                    insert_count += len(batch)
+                    batch = []
 
-                insert_count = 0
-                for line in lines:
-                    # Separar por pipe (|)
-                    parts = [p.strip() for p in line.split("|")]
-
-                    # Mapear por posición
-                    values = {}
-                    for field, idx in field_indices.items():
-                        if idx < len(parts):
-                            values[field] = parts[idx]
-                        else:
-                            values[field] = ""
-
-                    # Insertar el registro
-                    insert_sql = """
-                        INSERT INTO ruc (ruc, razon_social, dv, ruc_anterior, estado)
-                        VALUES (?, ?, ?, ?, ?)
-                    """
-                    cursor.execute(
-                        insert_sql,
-                        (
-                            values.get("ruc", ""),
-                            values.get("razon_social", ""),
-                            values.get("dv", ""),
-                            values.get("ruc_anterior", ""),
-                            values.get("estado", ""),
-                        ),
-                    )
-                    insert_count += 1
-
+            # Commit final
             conn.commit()
-            print(
-                f"  ✅ Base de datos SQLite creada: {sqlite_path} ({insert_count} registros)"
+            logger.info(
+                f"Base de datos SQLite creada: {sqlite_path} ({insert_count} registros)"
             )
             conn.close()
             return True
 
         except Exception as e:
-            print(f"  ❌ Error al crear la base de datos SQLite: {e}")
+            logger.error(f"Error al crear la base de datos SQLite: {e}")
+            if 'conn' in locals():
+                try:
+                    conn.rollback()
+                    conn.close()
+                except Exception as cleanup_error:
+                    logger.warning(f"Error al cerrar conexión SQLite: {cleanup_error}")
             return False

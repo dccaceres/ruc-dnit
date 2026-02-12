@@ -60,10 +60,10 @@ def get_db_path() -> Path:
 def search_ruc(ruc: str) -> Optional[dict]:
     """
     Busca un RUC exacto en la base de datos.
-
+    
     Args:
         ruc: RUC a buscar (sin DV)
-
+    
     Returns:
         Diccionario con los datos si se encuentra, None si no
     """
@@ -78,7 +78,10 @@ def search_ruc(ruc: str) -> Optional[dict]:
             row = cursor.fetchone()
 
             if row:
-                return dict(row)
+                result = dict(row)
+                # Agregar tipo de persona
+                result["tipo_persona"] = get_person_type(ruc)
+                return result
             return None
     except FileNotFoundError:
         logger.error("Base de datos no encontrada")
@@ -109,13 +112,44 @@ def search_razon_social(query: str) -> list:
             )
             rows = cursor.fetchall()
 
-            return [dict(row) for row in rows]
+            results = [dict(row) for row in rows]
+            
+            # Agregar tipo de persona a cada resultado
+            for result in results:
+                result["tipo_persona"] = get_person_type(result["ruc"])
+            
+            return results
     except FileNotFoundError:
         logger.error("Base de datos no encontrada")
         return []
     except Exception as e:
         logger.error(f"Error al buscar razón social: {e}")
         return []
+
+
+def get_person_type(ruc: str) -> str:
+    """
+    Determina si un RUC corresponde a persona física o jurídica.
+    
+    Args:
+        ruc: RUC a analizar (sin DV)
+        
+    Returns:
+        "física" si el RUC corresponde a persona física,
+        "jurídica" si corresponde a persona jurídica
+    """
+    if not ruc.isdigit():
+        return "desconocido"
+    
+    # Persona jurídica: empieza con "800" o "801" y tiene al menos 8 dígitos
+    if ruc.startswith(("800", "801", "802")) and len(ruc) >= 8:
+        return "JURIDICA"
+    
+    # Persona física: NO empieza con "800" y tiene entre 6-8 dígitos
+    if not ruc.startswith(("800", "801", "802")) and 6 <= len(ruc) <= 8:
+        return "FISICA"
+    
+    return "desconocido"
 
 
 def is_valid_ruc_format(ruc: str) -> bool:
@@ -134,11 +168,11 @@ def is_valid_ruc_format(ruc: str) -> bool:
 
 def format_response(row: dict) -> dict:
     """
-    Formatea la respuesta concatenando RUC con DV.
-
+    Formatea la respuesta concatenando RUC con DV y agregando tipo de persona.
+    
     Args:
         row: Diccionario con los datos de la fila
-
+    
     Returns:
         Diccionario formateado
     """
@@ -152,12 +186,13 @@ def format_response(row: dict) -> dict:
         "ruc": ruc_formatted,
         "razon_social": row.get("razon_social", "").strip(),
         "estado": row.get("estado", "").strip(),
+        "tipo_persona": row.get("tipo_persona", "desconocido"),
     }
 
 
 @app.get("/", 
          summary="Información de la API",
-         description="Endpoint raíz que proporciona información general sobre la API de consulta de RUC.")
+         description="Endpoint raíz que proporciona información general sobre la API de consulta de RUC, incluyendo la funcionalidad para determinar si un RUC es de persona física o jurídica.")
 def root():
     """Endpoint raíz con información de la API."""
     return {
@@ -165,16 +200,22 @@ def root():
         "version": "1.0.0",
         "description": "API REST para consultar RUC en base de datos SQLite",
         "endpoints": {
-            "/ruc/{ruc}": "Buscar por RUC exacto",
-            "/buscar": "Buscar por RUC o razón social (parámetro 'query')",
+            "/ruc/{ruc}": "Buscar por RUC exacto (incluye tipo de persona)",
+            "/buscar": "Buscar por RUC o razón social (parámetro 'query') (incluye tipo de persona)",
             "/health": "Verificar el estado de la API y la base de datos",
+        },
+        "features": {
+            "tipo_persona": "Determina si un RUC es de persona física o jurídica basado en el primer dígito",
+            "formato_ruc": "Valida que el RUC contenga solo dígitos y tenga longitud entre 1 y 10 caracteres",
+            "busqueda_exacta": "Busca RUC exactos en la base de datos",
+            "busqueda_razon_social": "Busca por coincidencias en razón social usando LIKE",
         },
     }
 
 
 @app.get("/ruc/{ruc}", 
          summary="Buscar por RUC exacto",
-         description="Busca un número de RUC exacto en la base de datos y devuelve sus detalles.")
+         description="Busca un número de RUC exacto en la base de datos y devuelve sus detalles, incluyendo el tipo de persona (física o jurídica).")
 def get_by_ruc(ruc: str):
     """
     Busca un RUC exacto en la base de datos.
@@ -199,7 +240,7 @@ def get_by_ruc(ruc: str):
 
 @app.get("/buscar",
          summary="Buscar por RUC o razón social",
-         description="Busca por número de RUC exacto o por razón social. Si la consulta es numérica, primero busca como RUC exacto, luego por coincidencias en razón social.")
+         description="Busca por número de RUC exacto o por razón social. Si la consulta es numérica, primero busca como RUC exacto, luego por coincidencias en razón social. Para resultados de RUC, incluye el tipo de persona (física o jurídica).")
 def search(
     query: str = Query(..., description="RUC o razón social a buscar", min_length=1),
     limit: int = Query(10, description="Cantidad máxima de resultados", ge=1, le=100),
